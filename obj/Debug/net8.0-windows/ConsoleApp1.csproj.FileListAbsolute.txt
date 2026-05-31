@@ -1,0 +1,17 @@
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0-windows\ConsoleApp1.exe
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0-windows\ConsoleApp1.deps.json
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0-windows\ConsoleApp1.runtimeconfig.json
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0-windows\ConsoleApp1.dll
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0-windows\ConsoleApp1.pdb
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\bin\Debug\net8.0-windows\InTheHand.Net.Bluetooth.dll
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.csproj.AssemblyReference.cache
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.GeneratedMSBuildEditorConfig.editorconfig
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.AssemblyInfoInputs.cache
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.AssemblyInfo.cs
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.csproj.CoreCompileInputs.cache
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleA.CB28C8CC.Up2Date
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.dll
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\refint\ConsoleApp1.dll
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.pdb
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ConsoleApp1.genruntimeconfig.cache
+C:\programers\testy ble\ConsoleApp1\ConsoleApp1\obj\Debug\net8.0-windows\ref\ConsoleApp1.dll

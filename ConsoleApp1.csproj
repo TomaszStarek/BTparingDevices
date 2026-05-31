@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- TYLKO ten jeden pakiet — bez żadnego .Win32 -->
+		<PackageReference Include="InTheHand.Net.Bluetooth" Version="4.2.4" />
+		<PackageReference Include="System.IO" Version="4.3.0" />
+		<PackageReference Include="System.IO.Ports" Version="10.0.8" />
+	</ItemGroup>
+</Project>
