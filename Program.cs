@@ -11,6 +11,14 @@ static class Program
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new MainForm());
+
+        using var startup = new StartupForm();
+        if (startup.ShowDialog() != DialogResult.OK || startup.Mode == StartupForm.ChosenMode.None)
+            return;
+
+        if (startup.Mode == StartupForm.ChosenMode.Remote)
+            Application.Run(new RemoteForm());
+        else
+            Application.Run(new LocalForm());
     }
 }
