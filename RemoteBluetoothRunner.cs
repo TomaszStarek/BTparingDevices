@@ -79,6 +79,49 @@ public static class BtRemoteNative
     [DllImport("bthprops.cpl", SetLastError = true)]
     static extern uint BluetoothSetServiceState(IntPtr hRadio, ref BLUETOOTH_DEVICE_INFO info, ref Guid guid, uint flags);
 
+    delegate bool PFN_AUTHENTICATION_CALLBACK_EX(IntPtr pvParam, ref BLUETOOTH_AUTHENTICATION_CALLBACK_PARAMS p);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BLUETOOTH_AUTHENTICATION_CALLBACK_PARAMS
+    {
+        public BLUETOOTH_DEVICE_INFO deviceInfo;
+        public uint authenticationMethod;
+        public uint ioCapability;
+        public uint authenticationRequirements;
+        public uint Numeric_Value_Passkey;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    struct BLUETOOTH_AUTHENTICATE_RESPONSE
+    {
+        [FieldOffset(0)]
+        public ulong bthAddressRemote;
+        [FieldOffset(8)]
+        public uint authMethod;
+        [FieldOffset(12)]
+        public uint numericValueOrPasskey;
+        [FieldOffset(44)]
+        public int negativeResponse;
+    }
+
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    static extern uint BluetoothRegisterForAuthenticationEx(ref BLUETOOTH_DEVICE_INFO pbtdiIn, out IntPtr phRegHandle, PFN_AUTHENTICATION_CALLBACK_EX pfnCallbackIn, IntPtr pvParam);
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    static extern uint BluetoothUnregisterAuthentication(IntPtr hRegHandle);
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    static extern uint BluetoothSendAuthenticationResponseEx(IntPtr hRadioIn, ref BLUETOOTH_AUTHENTICATE_RESPONSE pauthResponse);
+
+    static bool AutoAcceptCallback(IntPtr pvParam, ref BLUETOOTH_AUTHENTICATION_CALLBACK_PARAMS p)
+    {
+        BLUETOOTH_AUTHENTICATE_RESPONSE resp = new BLUETOOTH_AUTHENTICATE_RESPONSE();
+        resp.bthAddressRemote = p.deviceInfo.Address;
+        resp.authMethod = p.authenticationMethod;
+        resp.numericValueOrPasskey = p.Numeric_Value_Passkey;
+        resp.negativeResponse = 0;
+        BluetoothSendAuthenticationResponseEx(IntPtr.Zero, ref resp);
+        return true;
+    }
+
     static readonly Guid SPP_GUID = new Guid("00001101-0000-1000-8000-00805F9B34FB");
     const uint SERVICE_ENABLE = 0x00000001;
 
@@ -127,7 +170,18 @@ public static class BtRemoteNative
         BluetoothFindRadioClose(hRadioFind);
 
         var di = new BLUETOOTH_DEVICE_INFO { dwSize = (uint)Marshal.SizeOf<BLUETOOTH_DEVICE_INFO>(), Address = address };
+
+        // Zarejestruj auto-akceptacje PRZED parowaniem, zeby nie pokazalo sie
+        // okno "Pair Device - Allow/Cancel" na ekranie komputera docelowego.
+        PFN_AUTHENTICATION_CALLBACK_EX callback = new PFN_AUTHENTICATION_CALLBACK_EX(AutoAcceptCallback);
+        IntPtr hAuthReg;
+        uint regResult = BluetoothRegisterForAuthenticationEx(ref di, out hAuthReg, callback, IntPtr.Zero);
+
         uint result = BluetoothAuthenticateDevice(IntPtr.Zero, hRadio, ref di, pin, (uint)pin.Length);
+
+        if (regResult == 0) { BluetoothUnregisterAuthentication(hAuthReg); }
+        GC.KeepAlive(callback);
+
         if (result == 0)
         {
             var guid = SPP_GUID;

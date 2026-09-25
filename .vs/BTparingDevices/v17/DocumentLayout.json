@@ -3,16 +3,20 @@
   "WorkspaceRootPath": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\",
   "Documents": [
     {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\LocalForm.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:LocalForm.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\Program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\ConsoleApp1.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:ConsoleApp1.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\RemoteBluetoothRunner.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:RemoteBluetoothRunner.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\Program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\MainForm.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
@@ -43,6 +47,19 @@
             {
               "$type": "Document",
               "DocumentIndex": 0,
+              "Title": "LocalForm.cs",
+              "DocumentMoniker": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\LocalForm.cs",
+              "RelativeDocumentMoniker": "LocalForm.cs",
+              "ToolTip": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\LocalForm.cs",
+              "RelativeToolTip": "LocalForm.cs",
+              "ViewState": "AgIAAAYAAAAAAAAAAAAAAA0AAAAkAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-09-25T22:23:40.025Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
               "Title": "ConsoleApp1.csproj",
               "DocumentMoniker": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\ConsoleApp1.csproj",
               "RelativeDocumentMoniker": "ConsoleApp1.csproj",
@@ -55,7 +72,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 3,
               "Title": "RemoteBluetoothRunner.cs",
               "DocumentMoniker": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\RemoteBluetoothRunner.cs",
               "RelativeDocumentMoniker": "RemoteBluetoothRunner.cs",
@@ -63,12 +80,11 @@
               "RelativeToolTip": "RemoteBluetoothRunner.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAsAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-09-25T09:20:26.315Z",
-              "EditorCaption": ""
+              "WhenOpened": "2026-09-25T09:20:26.315Z"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 3,
+              "DocumentIndex": 4,
               "Title": "MainForm.cs",
               "DocumentMoniker": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\MainForm.cs",
               "RelativeDocumentMoniker": "MainForm.cs",
@@ -76,12 +92,11 @@
               "RelativeToolTip": "MainForm.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAABgAAAAnAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2026-09-25T07:58:12.752Z",
-              "EditorCaption": ""
+              "WhenOpened": "2026-09-25T07:58:12.752Z"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
+              "DocumentIndex": 1,
               "Title": "Program.cs",
               "DocumentMoniker": "C:\\Users\\szulena1\\source\\repos\\BTparingDevices\\Program.cs",
               "RelativeDocumentMoniker": "Program.cs",
