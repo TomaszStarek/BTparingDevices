@@ -216,7 +216,7 @@ function Connect-BtDeviceRemote {
 }
 """;
 
-    // Szablon skryptu URUCHAMIANEGO LOKALNIE (u operatora), ktory laczy sie
+    // Szablon skryptu URUCHAMIANEGO LOKALNIE (u operatora), ktory laczy się
     // przez WinRM z komputerem docelowym - wzorowany na Run-CleanUserJunk-Remote.ps1.
     const string DriverTemplate = """
 $ErrorActionPreference = 'Stop'
