@@ -274,17 +274,37 @@ public class RemoteForm : Form
 
         var target = displayedDevices[idx];
 
-        var confirm = MessageBox.Show(
-            $"Sparować urządzenie:\n{target.Name} ({target.Address})\n\nna komputerze:\n{computer}\n\nKontynuować?",
-            "Potwierdzenie parowania", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-        if (confirm != DialogResult.Yes) return;
-
         SetButtonsEnabled(false);
         try
         {
-            Log($"Paruję z: {target.Name} na komputerze {computer}...");
+            // 1. Sprawdź zajęte porty COM na komputerze zdalnym
+            Log($"Sprawdzam zajęte porty COM na {computer}...");
+            var (okPorts, portsOut, portsErr) = await RemoteBluetoothRunner.InvokeAsync(computer, user, pass, "Ports");
+            if (!okPorts)
+            {
+                Log($"Błąd odczytu portów: {(string.IsNullOrWhiteSpace(portsErr) ? "nieznany błąd" : portsErr)}");
+                return;
+            }
+            int[] usedPorts = RemoteBluetoothRunner.ParseUsedPorts(portsOut);
+
+            // 2. Okno wyboru portu (jednocześnie potwierdzenie parowania)
+            int? desiredPort;
+            using (var dlg = new ComPortDialog(target.Name, $"Komputer: {computer}", usedPorts))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK)
+                {
+                    Log("Anulowano.");
+                    return;
+                }
+                desiredPort = dlg.SelectedPort;
+            }
+
+            // 3. Parowanie + ustawienie portu na komputerze zdalnym
+            Log($"Paruję z: {target.Name} na komputerze {computer}" +
+                (desiredPort != null ? $" (docelowo COM{desiredPort})..." : " (port automatyczny)..."));
+
             var (ok, stdout, stderr) = await RemoteBluetoothRunner.InvokeAsync(
-                computer, user, pass, "Pair", target.AddressLong, "1234");
+                computer, user, pass, "Pair", target.AddressLong, "1234", desiredPort);
 
             if (!ok)
             {
@@ -300,7 +320,11 @@ public class RemoteForm : Form
             }
 
             Log(result.Paired ? "✅ Sparowano!" : "Parowanie bez PIN (SSP) lub niepowodzenie - sprawdź urządzenie.");
-            Log($"Porty COM na komputerze zdalnym: {(string.IsNullOrWhiteSpace(result.ComPorts) ? "(brak)" : result.ComPorts)}");
+            Log($"Port COM urządzenia na {computer}: {(string.IsNullOrWhiteSpace(result.ComPort) ? "(nie ustalono)" : result.ComPort)}");
+            if (!string.IsNullOrWhiteSpace(result.Message))
+                Log($"⚠ {result.Message}");
+            else if (desiredPort != null && string.Equals(result.ComPort, $"COM{desiredPort}", StringComparison.OrdinalIgnoreCase))
+                Log($"Port ustawiony zgodnie z wyborem (COM{desiredPort}).");
         }
         catch (Exception ex)
         {

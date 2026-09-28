@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -7,7 +8,8 @@ using System.Threading.Tasks;
 namespace BTparingDevices;
 
 public record RemoteBtDeviceDto(string Name, string Address, string AddressLong);
-public record RemotePairResultDto(bool Paired, string ComPorts);
+public record RemotePairResultDto(bool Paired, string ComPorts, string? ComPort, string? Message);
+public record RemotePortsDto(string? Used);
 public record RemoteTestResultDto(bool Ok, string ComputerName);
 
 /// <summary>
@@ -27,6 +29,7 @@ public static class RemoteBluetoothRunner
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 public static class BtRemoteNative
 {
@@ -125,6 +128,197 @@ public static class BtRemoteNative
     static readonly Guid SPP_GUID = new Guid("00001101-0000-1000-8000-00805F9B34FB");
     const uint SERVICE_ENABLE = 0x00000001;
 
+    // ---- Zarzadzanie numerem portu COM (COMDB + rejestr) ----
+    [DllImport("msports.dll")]
+    static extern int ComDBOpen(out IntPtr phComDB);
+    [DllImport("msports.dll")]
+    static extern int ComDBClose(IntPtr hComDB);
+    [DllImport("msports.dll")]
+    static extern int ComDBGetCurrentPortUsage(IntPtr hComDB, byte[] buffer, uint bufferSize, uint reportType, out uint maxPortsReported);
+    [DllImport("msports.dll")]
+    static extern int ComDBClaimPort(IntPtr hComDB, uint comNumber, int forceClaim, out int forced);
+    [DllImport("msports.dll")]
+    static extern int ComDBReleasePort(IntPtr hComDB, uint comNumber);
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    static extern uint BluetoothGetDeviceInfo(IntPtr hRadio, ref BLUETOOTH_DEVICE_INFO pbtdi);
+
+    const string BthEnumPath = @"SYSTEM\CurrentControlSet\Enum\BTHENUM";
+
+    static int ParsePort(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0;
+        if (!s.StartsWith("COM", StringComparison.OrdinalIgnoreCase)) return 0;
+        int n;
+        if (int.TryParse(s.Substring(3), out n)) return n;
+        return 0;
+    }
+
+    // Zwraca zajete numery portow jako tekst "1,3,4"
+    public static string GetUsedPorts()
+    {
+        bool[] used = new bool[4097];
+        IntPtr h;
+        if (ComDBOpen(out h) == 0)
+        {
+            try
+            {
+                byte[] buf = new byte[4096];
+                uint max;
+                if (ComDBGetCurrentPortUsage(h, buf, (uint)buf.Length, 1, out max) == 0)
+                {
+                    for (int i = 0; i < buf.Length; i++)
+                    {
+                        if (buf[i] != 0) used[i + 1] = true;
+                    }
+                }
+            }
+            finally { ComDBClose(h); }
+        }
+
+        try
+        {
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DEVICEMAP\SERIALCOMM"))
+            {
+                if (k != null)
+                {
+                    foreach (string name in k.GetValueNames())
+                    {
+                        object v = k.GetValue(name);
+                        int num = ParsePort(v == null ? null : v.ToString());
+                        if (num > 0 && num <= 4096) used[num] = true;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        for (int i = 1; i <= 4096; i++)
+        {
+            if (used[i])
+            {
+                if (sb.Length > 0) sb.Append(",");
+                sb.Append(i);
+            }
+        }
+        return sb.ToString();
+    }
+
+    static string FindPortKeyPath(ulong address)
+    {
+        string hex = address.ToString("X12");
+        using (RegistryKey root = Registry.LocalMachine.OpenSubKey(BthEnumPath))
+        {
+            if (root == null) return null;
+            foreach (string devKeyName in root.GetSubKeyNames())
+            {
+                if (!devKeyName.StartsWith("{00001101-", StringComparison.OrdinalIgnoreCase)) continue;
+                using (RegistryKey devKey = root.OpenSubKey(devKeyName))
+                {
+                    if (devKey == null) continue;
+                    foreach (string inst in devKey.GetSubKeyNames())
+                    {
+                        if (inst.IndexOf(hex, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        string path = BthEnumPath + "\\" + devKeyName + "\\" + inst + "\\Device Parameters";
+                        using (RegistryKey p = Registry.LocalMachine.OpenSubKey(path))
+                        {
+                            if (p != null && p.GetValue("PortName") != null) return path;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    // Aktualny port urzadzenia (np. "COM7") albo pusty tekst
+    public static string GetDevicePort(ulong address)
+    {
+        try
+        {
+            string path = FindPortKeyPath(address);
+            if (path == null) return "";
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(path))
+            {
+                if (k == null) return "";
+                object v = k.GetValue("PortName");
+                return v == null ? "" : v.ToString();
+            }
+        }
+        catch { return ""; }
+    }
+
+    // Zwraca "" gdy OK, w przeciwnym razie opis bledu
+    public static string SetDevicePort(ulong address, int newPort)
+    {
+        try
+        {
+            string path = FindPortKeyPath(address);
+            if (path == null) return "Nie znaleziono portu COM tego urzadzenia w rejestrze.";
+
+            string oldName = null;
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(path))
+            {
+                if (k != null)
+                {
+                    object v = k.GetValue("PortName");
+                    if (v != null) oldName = v.ToString();
+                }
+            }
+            int oldNum = ParsePort(oldName);
+            if (oldNum == newPort) return "";
+
+            IntPtr h;
+            int r = ComDBOpen(out h);
+            if (r != 0) return "Nie mozna otworzyc bazy portow COM (ComDBOpen=" + r + ").";
+            try
+            {
+                int forced;
+                r = ComDBClaimPort(h, (uint)newPort, 0, out forced);
+                if (r != 0) return "Port COM" + newPort + " jest zajety (ComDBClaimPort=" + r + ").";
+
+                using (RegistryKey k = Registry.LocalMachine.OpenSubKey(path, true))
+                {
+                    if (k == null)
+                    {
+                        ComDBReleasePort(h, (uint)newPort);
+                        return "Brak dostepu do zapisu w rejestrze.";
+                    }
+                    k.SetValue("PortName", "COM" + newPort, RegistryValueKind.String);
+                }
+
+                if (oldNum > 0) ComDBReleasePort(h, (uint)oldNum);
+            }
+            finally { ComDBClose(h); }
+            return "";
+        }
+        catch (Exception ex)
+        {
+            return "Blad zmiany portu: " + ex.Message;
+        }
+    }
+
+    // Wylacza i wlacza usluge SPP, zeby Windows odtworzyl port z nowa nazwa
+    public static bool RestartSppService(ulong address)
+    {
+        BLUETOOTH_FIND_RADIO_PARAMS rp = new BLUETOOTH_FIND_RADIO_PARAMS();
+        rp.dwSize = (uint)Marshal.SizeOf(typeof(BLUETOOTH_FIND_RADIO_PARAMS));
+        IntPtr hRadio;
+        IntPtr hFind = BluetoothFindFirstRadio(ref rp, out hRadio);
+        if (hFind == IntPtr.Zero) return false;
+        BluetoothFindRadioClose(hFind);
+
+        BLUETOOTH_DEVICE_INFO di = new BLUETOOTH_DEVICE_INFO();
+        di.dwSize = (uint)Marshal.SizeOf(typeof(BLUETOOTH_DEVICE_INFO));
+        di.Address = address;
+        BluetoothGetDeviceInfo(hRadio, ref di);
+
+        Guid guid = SPP_GUID;
+        BluetoothSetServiceState(hRadio, ref di, ref guid, 0);
+        System.Threading.Thread.Sleep(1500);
+        return BluetoothSetServiceState(hRadio, ref di, ref guid, SERVICE_ENABLE) == 0;
+    }
+
     public static List<string[]> DiscoverDevices()
     {
         var result = new List<string[]>();
@@ -204,19 +398,46 @@ function Get-BtDevicesRemote {
     }
 }
 
+function Get-BtUsedPortsRemote {
+    param([string]$BtNativeSource)
+    Add-Type -TypeDefinition $BtNativeSource -Language CSharp -ErrorAction Stop
+    [PSCustomObject]@{ Used = [BtRemoteNative]::GetUsedPorts() }
+}
+
 function Connect-BtDeviceRemote {
-    param([string]$BtNativeSource, [string]$AddressLong, [string]$Pin)
+    param([string]$BtNativeSource, [string]$AddressLong, [string]$Pin, [string]$DesiredPort)
     Add-Type -TypeDefinition $BtNativeSource -Language CSharp -ErrorAction Stop
     $addr = [UInt64]::Parse($AddressLong)
     $ok = [BtRemoteNative]::PairDevice($addr, $Pin)
     if (-not $ok) { $ok = [BtRemoteNative]::PairDevice($addr, '0000') }
-    Start-Sleep -Seconds 3
+
+    # poczekaj az Windows utworzy port COM dla tego urzadzenia (do ~10 s)
+    $port = ''
+    for ($i = 0; $i -lt 10 -and -not $port; $i++) {
+        Start-Sleep -Seconds 1
+        $port = [BtRemoteNative]::GetDevicePort($addr)
+    }
+
+    $msg = ''
+    if ($DesiredPort -and $port -and ($port -ne ('COM' + $DesiredPort))) {
+        $err = [BtRemoteNative]::SetDevicePort($addr, [int]$DesiredPort)
+        if ($err) {
+            $msg = $err
+        } else {
+            [void][BtRemoteNative]::RestartSppService($addr)
+            Start-Sleep -Seconds 2
+            $newPort = [BtRemoteNative]::GetDevicePort($addr)
+            if ($newPort) { $port = $newPort }
+        }
+    }
+    if ($DesiredPort -and -not $port) { $msg = 'Nie ustalono portu COM urzadzenia (brak wpisu w rejestrze).' }
+
     $ports = [System.IO.Ports.SerialPort]::GetPortNames()
-    [PSCustomObject]@{ Paired = $ok; ComPorts = ($ports -join ', ') }
+    [PSCustomObject]@{ Paired = $ok; ComPorts = ($ports -join ', '); ComPort = $port; Message = $msg }
 }
 """;
 
-    // Szablon skryptu URUCHAMIANEGO LOKALNIE (u operatora), ktory laczy się
+    // Szablon skryptu URUCHAMIANEGO LOKALNIE (u operatora), ktory laczy sie
     // przez WinRM z komputerem docelowym - wzorowany na Run-CleanUserJunk-Remote.ps1.
     const string DriverTemplate = """
 $ErrorActionPreference = 'Stop'
@@ -234,14 +455,15 @@ __WORKER__
 '@
 
 $wrapperSb = {
-    param($BtNativeSourceText, $WorkerText, $Action, $AddressLong, $Pin)
+    param($BtNativeSourceText, $WorkerText, $Action, $AddressLong, $Pin, $DesiredPort)
     . ([ScriptBlock]::Create($WorkerText))
     if ($Action -eq 'Discover') { Get-BtDevicesRemote -BtNativeSource $BtNativeSourceText }
-    elseif ($Action -eq 'Pair') { Connect-BtDeviceRemote -BtNativeSource $BtNativeSourceText -AddressLong $AddressLong -Pin $Pin }
+    elseif ($Action -eq 'Pair') { Connect-BtDeviceRemote -BtNativeSource $BtNativeSourceText -AddressLong $AddressLong -Pin $Pin -DesiredPort $DesiredPort }
+    elseif ($Action -eq 'Ports') { Get-BtUsedPortsRemote -BtNativeSource $BtNativeSourceText }
     elseif ($Action -eq 'Test') { [PSCustomObject]@{ Ok = $true; ComputerName = $env:COMPUTERNAME } }
 }
 
-$result = Invoke-Command -ComputerName '__COMPUTER__' -Credential $cred -ScriptBlock $wrapperSb -ArgumentList $BtNativeSource, $workerText, '__ACTION__', '__ADDR__', '__PIN__' -ErrorAction Stop
+$result = Invoke-Command -ComputerName '__COMPUTER__' -Credential $cred -ScriptBlock $wrapperSb -ArgumentList $BtNativeSource, $workerText, '__ACTION__', '__ADDR__', '__PIN__', '__PORT__' -ErrorAction Stop
 
 $arr = @($result)
 if ($arr.Count -eq 0) {
@@ -255,7 +477,7 @@ if ($arr.Count -eq 0) {
 
     public static async Task<(bool Success, string StdOut, string StdErr)> InvokeAsync(
         string computer, string username, string password, string action,
-        string? addressLong = null, string? pin = null)
+        string? addressLong = null, string? pin = null, int? desiredPort = null)
     {
         string driver = DriverTemplate
             .Replace("__USER__", EscapeSingleQuote(username))
@@ -264,7 +486,8 @@ if ($arr.Count -eq 0) {
             .Replace("__COMPUTER__", EscapeSingleQuote(computer))
             .Replace("__ACTION__", EscapeSingleQuote(action))
             .Replace("__ADDR__", EscapeSingleQuote(addressLong ?? ""))
-            .Replace("__PIN__", EscapeSingleQuote(pin ?? ""));
+            .Replace("__PIN__", EscapeSingleQuote(pin ?? ""))
+            .Replace("__PORT__", desiredPort?.ToString() ?? "");
 
         byte[] bytes = Encoding.Unicode.GetBytes(driver);
         string encoded = Convert.ToBase64String(bytes);
@@ -299,6 +522,17 @@ if ($arr.Count -eq 0) {
     {
         var arr = JsonSerializer.Deserialize<RemotePairResultDto[]>(json, JsonOpts);
         return arr is { Length: > 0 } ? arr[0] : null;
+    }
+
+    /// <summary>Zajęte porty COM na komputerze zdalnym (zwrócone jako "1,3,4").</summary>
+    public static int[] ParseUsedPorts(string json)
+    {
+        var arr = JsonSerializer.Deserialize<RemotePortsDto[]>(json, JsonOpts);
+        string used = arr is { Length: > 0 } ? arr[0].Used ?? "" : "";
+        return used.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                   .Select(x => int.TryParse(x, out int n) ? n : 0)
+                   .Where(n => n > 0)
+                   .ToArray();
     }
 
     public static RemoteTestResultDto? ParseTestResult(string json)

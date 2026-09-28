@@ -212,6 +212,28 @@ public class LocalForm : Form
 
         try
         {
+            // 1. Sprawdź które porty COM są zajęte i zapytaj o port dla nowego klucza
+            Log("Sprawdzam zajęte porty COM...");
+            var used = await Task.Run(() => BluetoothNative.GetUsedComPorts());
+
+            int? desiredPort;
+            using (var dlg = new ComPortDialog(target.Name, "Komputer: ten (lokalny)", used))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK)
+                {
+                    Log("Anulowano.");
+                    return;
+                }
+                desiredPort = dlg.SelectedPort;
+            }
+
+            if (desiredPort != null && !BluetoothNative.IsAdministrator())
+            {
+                Log("⚠ Zmiana numeru portu wymaga uruchomienia aplikacji jako administrator. Port zostanie przydzielony automatycznie.");
+                desiredPort = null;
+            }
+
+            // 2. Parowanie
             Log($"Paruję z: {target.Name}...");
             bool paired = await Task.Run(() => BluetoothNative.PairDevice(target.AddressLong, "1234"));
             if (!paired)
@@ -219,20 +241,47 @@ public class LocalForm : Form
 
             Log(paired ? "Sparowano!" : "Parowanie bez PIN (SSP)...");
 
+            // 3. Poczekaj aż Windows utworzy port COM dla tego urządzenia (do ~10 s)
             Log("Czekam na port COM...");
-            await Task.Delay(3000);
-
-            string[] ports = SerialPort.GetPortNames();
-            Log($"Dostępne porty: {string.Join(", ", ports)}");
-
-            if (ports.Length == 0)
+            string? comPort = null;
+            for (int i = 0; i < 10 && comPort == null; i++)
             {
-                Log("Brak portów COM. Sprawdź Menedżer urządzeń.");
-                return;
+                await Task.Delay(1000);
+                comPort = await Task.Run(() => BluetoothNative.GetDevicePort(target.AddressLong));
             }
 
-            string comPort = ports[^1];
-            Log($"Używam portu: {comPort}");
+            // 4. Przestaw na wybrany port, jeśli inny niż przydzielony
+            if (comPort != null && desiredPort != null && !string.Equals(comPort, $"COM{desiredPort}", StringComparison.OrdinalIgnoreCase))
+            {
+                Log($"Windows przydzielił {comPort}, ustawiam COM{desiredPort}...");
+                string err = await Task.Run(() => BluetoothNative.SetDevicePort(target.AddressLong, desiredPort.Value));
+                if (err.Length > 0)
+                {
+                    Log($"Nie udało się zmienić portu: {err}");
+                }
+                else
+                {
+                    await Task.Run(() => BluetoothNative.RestartSppService(target.AddressLong));
+                    await Task.Delay(2000);
+                    comPort = await Task.Run(() => BluetoothNative.GetDevicePort(target.AddressLong)) ?? comPort;
+                }
+            }
+
+            // 5. Awaryjnie: jeśli nie udało się ustalić portu z rejestru, weź ostatni z listy
+            if (comPort == null)
+            {
+                string[] ports = SerialPort.GetPortNames();
+                Log($"Dostępne porty: {string.Join(", ", ports)}");
+                if (ports.Length == 0)
+                {
+                    Log("Brak portów COM. Sprawdź Menedżer urządzeń.");
+                    return;
+                }
+                comPort = ports[^1];
+                Log("⚠ Nie ustalono portu urządzenia z rejestru - używam ostatniego z listy.");
+            }
+
+            Log($"Port urządzenia: {comPort}");
 
             try
             {

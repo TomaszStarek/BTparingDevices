@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
+using Microsoft.Win32;
 
 namespace BTparingDevices;
 
@@ -125,6 +127,172 @@ public static class BluetoothNative
 
     static readonly Guid SPP_SERVICE_GUID = new("00001101-0000-1000-8000-00805F9B34FB");
     const uint BLUETOOTH_SERVICE_ENABLE = 0x00000001;
+    const uint BLUETOOTH_SERVICE_DISABLE = 0x00000000;
+
+    // ---- Zarządzanie numerem portu COM ----
+    // Windows trzyma przydział portów w "COM Name Arbiter" (COMDB, msports.dll), a nazwę portu
+    // urządzenia BT w rejestrze: ...\Enum\BTHENUM\{SPP}\<instancja>\Device Parameters\PortName.
+    [DllImport("msports.dll")]
+    static extern int ComDBOpen(out IntPtr phComDB);
+    [DllImport("msports.dll")]
+    static extern int ComDBClose(IntPtr hComDB);
+    [DllImport("msports.dll")]
+    static extern int ComDBGetCurrentPortUsage(IntPtr hComDB, byte[] buffer, uint bufferSize, uint reportType, out uint maxPortsReported);
+    [DllImport("msports.dll")]
+    static extern int ComDBClaimPort(IntPtr hComDB, uint comNumber, int forceClaim, out int forced);
+    [DllImport("msports.dll")]
+    static extern int ComDBReleasePort(IntPtr hComDB, uint comNumber);
+
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    static extern uint BluetoothGetDeviceInfo(IntPtr hRadio, ref BLUETOOTH_DEVICE_INFO pbtdi);
+
+    const string BthEnumPath = @"SYSTEM\CurrentControlSet\Enum\BTHENUM";
+
+    public static bool IsAdministrator()
+    {
+        using var id = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    static int ParsePort(string? s)
+    {
+        if (string.IsNullOrEmpty(s) || !s.StartsWith("COM", StringComparison.OrdinalIgnoreCase)) return 0;
+        return int.TryParse(s.AsSpan(3), out int n) ? n : 0;
+    }
+
+    /// <summary>Numery portów COM zajętych (zarezerwowanych w COMDB lub aktywnych w SERIALCOMM).</summary>
+    public static HashSet<int> GetUsedComPorts()
+    {
+        var used = new HashSet<int>();
+
+        if (ComDBOpen(out IntPtr h) == 0)
+        {
+            try
+            {
+                var buf = new byte[4096];
+                if (ComDBGetCurrentPortUsage(h, buf, (uint)buf.Length, 1 /* CDB_REPORT_BYTES */, out _) == 0)
+                {
+                    for (int i = 0; i < buf.Length; i++)
+                        if (buf[i] != 0) used.Add(i + 1);
+                }
+            }
+            finally { ComDBClose(h); }
+        }
+
+        try
+        {
+            using var k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DEVICEMAP\SERIALCOMM");
+            if (k != null)
+                foreach (var name in k.GetValueNames())
+                {
+                    int n = ParsePort(k.GetValue(name)?.ToString());
+                    if (n > 0) used.Add(n);
+                }
+        }
+        catch { /* brak dostępu - zostajemy przy COMDB */ }
+
+        return used;
+    }
+
+    static string? FindPortKeyPath(ulong address)
+    {
+        string hex = address.ToString("X12");
+        using var root = Registry.LocalMachine.OpenSubKey(BthEnumPath);
+        if (root == null) return null;
+
+        foreach (var devKeyName in root.GetSubKeyNames())
+        {
+            if (!devKeyName.StartsWith("{00001101-", StringComparison.OrdinalIgnoreCase)) continue;
+            using var devKey = root.OpenSubKey(devKeyName);
+            if (devKey == null) continue;
+
+            foreach (var inst in devKey.GetSubKeyNames())
+            {
+                if (inst.IndexOf(hex, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                string path = $@"{BthEnumPath}\{devKeyName}\{inst}\Device Parameters";
+                using var p = Registry.LocalMachine.OpenSubKey(path);
+                if (p?.GetValue("PortName") != null) return path;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Aktualny port COM urządzenia (np. "COM7") albo null, jeśli jeszcze nie utworzony.</summary>
+    public static string? GetDevicePort(ulong address)
+    {
+        try
+        {
+            string? path = FindPortKeyPath(address);
+            if (path == null) return null;
+            using var k = Registry.LocalMachine.OpenSubKey(path);
+            return k?.GetValue("PortName")?.ToString();
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Przestawia port COM urządzenia. Zwraca "" gdy OK, w przeciwnym razie opis błędu.</summary>
+    public static string SetDevicePort(ulong address, int newPort)
+    {
+        try
+        {
+            string? path = FindPortKeyPath(address);
+            if (path == null) return "Nie znaleziono portu COM tego urządzenia w rejestrze.";
+
+            string? oldName;
+            using (var k = Registry.LocalMachine.OpenSubKey(path))
+                oldName = k?.GetValue("PortName")?.ToString();
+            int oldNum = ParsePort(oldName);
+            if (oldNum == newPort) return "";
+
+            int r = ComDBOpen(out IntPtr h);
+            if (r != 0) return $"Nie można otworzyć bazy portów COM (ComDBOpen={r}).";
+            try
+            {
+                r = ComDBClaimPort(h, (uint)newPort, 0, out _);
+                if (r != 0) return $"Port COM{newPort} jest zajęty (ComDBClaimPort={r}).";
+
+                using (var k = Registry.LocalMachine.OpenSubKey(path, writable: true))
+                {
+                    if (k == null)
+                    {
+                        ComDBReleasePort(h, (uint)newPort);
+                        return "Brak dostępu do zapisu w rejestrze (uruchom jako administrator).";
+                    }
+                    k.SetValue("PortName", $"COM{newPort}", RegistryValueKind.String);
+                }
+
+                if (oldNum > 0) ComDBReleasePort(h, (uint)oldNum);
+            }
+            finally { ComDBClose(h); }
+
+            return "";
+        }
+        catch (Exception ex)
+        {
+            return $"Błąd zmiany portu: {ex.Message}";
+        }
+    }
+
+    /// <summary>Wyłącza i włącza usługę SPP, żeby Windows odtworzył port z nową nazwą.</summary>
+    public static bool RestartSppService(ulong address)
+    {
+        var rp = new BLUETOOTH_FIND_RADIO_PARAMS { dwSize = (uint)Marshal.SizeOf<BLUETOOTH_FIND_RADIO_PARAMS>() };
+        IntPtr hFind = BluetoothFindFirstRadio(ref rp, out IntPtr hRadio);
+        if (hFind == IntPtr.Zero) return false;
+        BluetoothFindRadioClose(hFind);
+
+        var di = new BLUETOOTH_DEVICE_INFO
+        {
+            dwSize = (uint)Marshal.SizeOf<BLUETOOTH_DEVICE_INFO>(),
+            Address = address
+        };
+        BluetoothGetDeviceInfo(hRadio, ref di);
+
+        var guid = SPP_SERVICE_GUID;
+        BluetoothSetServiceState(hRadio, ref di, ref guid, BLUETOOTH_SERVICE_DISABLE);
+        System.Threading.Thread.Sleep(1500);
+        return BluetoothSetServiceState(hRadio, ref di, ref guid, BLUETOOTH_SERVICE_ENABLE) == 0;
+    }
 
     public record BluetoothDevice(string Name, string Address, ulong AddressLong);
 
