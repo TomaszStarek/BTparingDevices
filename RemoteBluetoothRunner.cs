@@ -1,8 +1,11 @@
 ﻿using System;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace BTparingDevices;
@@ -441,6 +444,9 @@ function Connect-BtDeviceRemote {
     // przez WinRM z komputerem docelowym - wzorowany na Run-CleanUserJunk-Remote.ps1.
     const string DriverTemplate = """
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 $plainPw = $env:BTPAIR_REMOTE_PW
 if (-not $plainPw) { throw 'Brak hasla (zmienna srodowiskowa BTPAIR_REMOTE_PW).' }
 $securePw = ConvertTo-SecureString -String $plainPw -AsPlainText -Force
@@ -477,7 +483,8 @@ if ($arr.Count -eq 0) {
 
     public static async Task<(bool Success, string StdOut, string StdErr)> InvokeAsync(
         string computer, string username, string password, string action,
-        string? addressLong = null, string? pin = null, int? desiredPort = null)
+        string? addressLong = null, string? pin = null, int? desiredPort = null,
+        int timeoutSeconds = 300)
     {
         string driver = DriverTemplate
             .Replace("__USER__", EscapeSingleQuote(username))
@@ -489,54 +496,142 @@ if ($arr.Count -eq 0) {
             .Replace("__PIN__", EscapeSingleQuote(pin ?? ""))
             .Replace("__PORT__", desiredPort?.ToString() ?? "");
 
-        // UWAGA: NIE przekazujemy skryptu przez -EncodedCommand w wierszu polecen.
-        // Ten sterownik osadza cale zrodlo BluetoothNative.cs (kilkanascie KB) jako
-        // tekst, wiec zakodowany Base64 latwo przekracza limit dlugosci wiersza
-        // polecen Windows (CreateProcess) - obserwowany objaw to Win32Exception
-        // "Nazwa pliku lub jej rozszerzenie sa za dlugie" (blad 206). Zamiast tego
-        // skrypt jest wysylany przez standardowe wejscie (stdin), ktore nie ma
-        // takiego limitu.
-        var psi = new ProcessStartInfo
+        // POPRAWKA: wczesniej skrypt szedl przez stdin ("-Command -"). PowerShell czyta
+        // wtedy skrypt linia po linii jak w konsoli interaktywnej, a tutaj-lancuchy @'...'@
+        // z kodem C# (z pustymi liniami) potrafia sie wtedy "rozsypac" - skrypt nic nie
+        // wypisuje, kod wyjscia bywa 0, a program dostaje PUSTY stdout i zglasza
+        // "The input does not contain any JSON tokens".
+        //
+        // Teraz: skrypt zapisujemy do pliku tymczasowego (UTF-8) i uruchamiamy jako
+        // ScriptBlock::Create(ReadAllText(...)). Dzieki temu:
+        //  - brak limitu dlugosci wiersza polecen (nic dlugiego nie idzie w argumentach),
+        //  - brak problemow z parsowaniem stdin,
+        //  - ExecutionPolicy nie ma znaczenia (nie uruchamiamy pliku .ps1, tylko czytamy tekst).
+        string scriptPath = Path.Combine(Path.GetTempPath(), "btpair_" + Guid.NewGuid().ToString("N") + ".ps1");
+        await File.WriteAllTextAsync(scriptPath, driver, new UTF8Encoding(false));
+
+        try
         {
-            FileName = "powershell.exe",
-            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        // Haslo przekazywane zmienna srodowiskowa procesu potomnego (nie w wierszu
-        // polecen), zeby nie bylo widoczne np. w Menedzerze zadan / historii.
-        psi.Environment["BTPAIR_REMOTE_PW"] = password;
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                RedirectStandardInput = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-NonInteractive");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-OutputFormat");
+            psi.ArgumentList.Add("Text");   // bez opakowania bledow w CLIXML
+            psi.ArgumentList.Add("-Command");
+            psi.ArgumentList.Add("& ([scriptblock]::Create([System.IO.File]::ReadAllText('"
+                                 + EscapeSingleQuote(scriptPath) + "', [System.Text.Encoding]::UTF8)))");
 
-        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Nie udalo sie uruchomic powershell.exe.");
+            // Haslo przekazywane zmienna srodowiskowa procesu potomnego (nie w wierszu
+            // polecen), zeby nie bylo widoczne np. w Menedzerze zadan / historii.
+            psi.Environment["BTPAIR_REMOTE_PW"] = password;
 
-        await proc.StandardInput.WriteAsync(driver);
-        proc.StandardInput.Close();
+            using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Nie udalo sie uruchomic powershell.exe.");
 
-        string stdout = await proc.StandardOutput.ReadToEndAsync();
-        string stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
+            // Stdout i stderr czytane rownolegle - sekwencyjne ReadToEnd moze sie zakleszczyc.
+            var outTask = proc.StandardOutput.ReadToEndAsync();
+            var errTask = proc.StandardError.ReadToEndAsync();
 
-        return (proc.ExitCode == 0, stdout.Trim(), stderr.Trim());
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+            try
+            {
+                await proc.WaitForExitAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(true); } catch { }
+                return (false, "", $"Przekroczono limit czasu ({timeoutSeconds} s) - komputer '{computer}' nie odpowiada (WinRM / zapora / TrustedHosts?).");
+            }
+
+            string rawOut = await outTask;
+            string stderr = CleanStdErr(await errTask);
+            string json = ExtractJson(rawOut);
+
+            if (json.Length == 0)
+            {
+                // Nigdy nie zwracamy pustego "sukcesu" - inaczej parser JSON rzuca
+                // niezrozumialy blad "does not contain any JSON tokens".
+                var sb = new StringBuilder();
+                sb.Append($"Zdalne polecenie nie zwrocilo danych (kod wyjscia {proc.ExitCode}).");
+                if (!string.IsNullOrWhiteSpace(stderr)) sb.Append(' ').Append(stderr);
+                else if (!string.IsNullOrWhiteSpace(rawOut))
+                    sb.Append(" Nieoczekiwany wynik: ").Append(rawOut.Trim().Length > 500 ? rawOut.Trim()[..500] : rawOut.Trim());
+                else
+                    sb.Append(" Sprawdz: WinRM na komputerze docelowym (Enable-PSRemoting -Force), " +
+                              "TrustedHosts po stronie operatora, nazwe komputera, login i haslo.");
+                return (false, "", sb.ToString());
+            }
+
+            return (proc.ExitCode == 0, json, stderr);
+        }
+        finally
+        {
+            try { File.Delete(scriptPath); } catch { }
+        }
+    }
+
+    /// <summary>Wyciaga ostatnia linie wygladajaca na JSON-a (tablica) - odporne na ewentualne
+    /// dodatkowe linie (ostrzezenia, banery) w stdout.</summary>
+    static string ExtractJson(string stdout)
+    {
+        if (string.IsNullOrWhiteSpace(stdout)) return "";
+        var lines = stdout.Split('\n');
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            string t = lines[i].Trim();
+            if (t.StartsWith("[") && t.EndsWith("]")) return t;
+        }
+        return "";
+    }
+
+    /// <summary>Jesli PowerShell mimo wszystko opakowal bledy w CLIXML - wyciaga z niego czytelny tekst.</summary>
+    static string CleanStdErr(string stderr)
+    {
+        stderr = (stderr ?? "").Trim();
+        if (!stderr.StartsWith("#< CLIXML")) return stderr;
+        var parts = Regex.Matches(stderr, "<S S=\"Error\">(.*?)</S>", RegexOptions.Singleline)
+                         .Select(m => m.Groups[1].Value
+                             .Replace("_x000D__x000A_", " ")
+                             .Replace("&lt;", "<").Replace("&gt;", ">").Replace("&amp;", "&")
+                             .Trim())
+                         .Where(x => x.Length > 0);
+        string text = string.Join(" ", parts);
+        return text.Length > 0 ? text : stderr;
     }
 
     static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
+    static string RequireJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            throw new InvalidOperationException("Komputer zdalny zwrocil pusta odpowiedz (brak danych JSON).");
+        return json;
+    }
+
     public static RemoteBtDeviceDto[] ParseDevices(string json)
-        => JsonSerializer.Deserialize<RemoteBtDeviceDto[]>(json, JsonOpts) ?? Array.Empty<RemoteBtDeviceDto>();
+        => JsonSerializer.Deserialize<RemoteBtDeviceDto[]>(RequireJson(json), JsonOpts) ?? Array.Empty<RemoteBtDeviceDto>();
 
     public static RemotePairResultDto? ParsePairResult(string json)
     {
-        var arr = JsonSerializer.Deserialize<RemotePairResultDto[]>(json, JsonOpts);
+        var arr = JsonSerializer.Deserialize<RemotePairResultDto[]>(RequireJson(json), JsonOpts);
         return arr is { Length: > 0 } ? arr[0] : null;
     }
 
     /// <summary>Zajęte porty COM na komputerze zdalnym (zwrócone jako "1,3,4").</summary>
     public static int[] ParseUsedPorts(string json)
     {
-        var arr = JsonSerializer.Deserialize<RemotePortsDto[]>(json, JsonOpts);
+        var arr = JsonSerializer.Deserialize<RemotePortsDto[]>(RequireJson(json), JsonOpts);
         string used = arr is { Length: > 0 } ? arr[0].Used ?? "" : "";
         return used.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                    .Select(x => int.TryParse(x, out int n) ? n : 0)
@@ -546,7 +641,7 @@ if ($arr.Count -eq 0) {
 
     public static RemoteTestResultDto? ParseTestResult(string json)
     {
-        var arr = JsonSerializer.Deserialize<RemoteTestResultDto[]>(json, JsonOpts);
+        var arr = JsonSerializer.Deserialize<RemoteTestResultDto[]>(RequireJson(json), JsonOpts);
         return arr is { Length: > 0 } ? arr[0] : null;
     }
 
