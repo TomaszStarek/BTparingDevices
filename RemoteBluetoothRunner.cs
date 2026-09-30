@@ -489,13 +489,18 @@ if ($arr.Count -eq 0) {
             .Replace("__PIN__", EscapeSingleQuote(pin ?? ""))
             .Replace("__PORT__", desiredPort?.ToString() ?? "");
 
-        byte[] bytes = Encoding.Unicode.GetBytes(driver);
-        string encoded = Convert.ToBase64String(bytes);
-
+        // UWAGA: NIE przekazujemy skryptu przez -EncodedCommand w wierszu polecen.
+        // Ten sterownik osadza cale zrodlo BluetoothNative.cs (kilkanascie KB) jako
+        // tekst, wiec zakodowany Base64 latwo przekracza limit dlugosci wiersza
+        // polecen Windows (CreateProcess) - obserwowany objaw to Win32Exception
+        // "Nazwa pliku lub jej rozszerzenie sa za dlugie" (blad 206). Zamiast tego
+        // skrypt jest wysylany przez standardowe wejscie (stdin), ktore nie ma
+        // takiego limitu.
         var psi = new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encoded}",
+            Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -",
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -506,6 +511,10 @@ if ($arr.Count -eq 0) {
         psi.Environment["BTPAIR_REMOTE_PW"] = password;
 
         using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Nie udalo sie uruchomic powershell.exe.");
+
+        await proc.StandardInput.WriteAsync(driver);
+        proc.StandardInput.Close();
+
         string stdout = await proc.StandardOutput.ReadToEndAsync();
         string stderr = await proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();
